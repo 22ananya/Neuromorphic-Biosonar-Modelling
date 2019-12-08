@@ -1,0 +1,217 @@
+
+ clear all
+ close all
+% 
+% %% Loading Data Set
+clear all
+%clearvars -except full_sta full_dyn
+close all
+load('full_data.mat') %TODO for Full data
+%   load('10_12_CRC_noc_sta_4.mat')
+%  full_sta = data_mat;
+%  load('10_12_CRC_noc_dyn_4.mat')
+%  full_dyn = data_mat(:,1:size(full_sta,2));
+
+data_range = 'Mix';
+BM_model = 2;
+SR_model = 2;
+for q = 1:2
+    if q == 1
+        file = full_sta;
+        count = 1;
+    else
+        file = full_dyn;
+        count = 2;
+    end
+    %% Center Frequencies Setting
+    min_f       = 20e3;     % Minimum Frequency
+    max_f       = 45e3;     % Maximum Frequency
+    nChan       = 100;       % Number of channels
+    fs          = 400e3;    % Sampling rate Fs in Hz
+    [fc, ERB]   = fc_ERB_hb(min_f, max_f, nChan); 
+
+    %nData       = length(data_range); TODO                                        % Data set
+    %data_mat    = double(file(6001:10000,data_range)); %zeros(3000,nData)]; %ones(3000,nData).*file(10000,:)];    % One-ear data set
+    rg1 = [8036:10802]; %STW6
+    %rg2 = [15920:18672];%GRV2
+    rg3 = [23101:25969];%IVL3
+    limits = [1, 6438, 8035, 10802, 15920, 18672, 23101, 25969, 30964];
+    stepsize = 20;
+    rg = 1:stepsize:30963; %STW6
+    
+    data_mat    = double(file(6001:10000,rg));
+    nData       = size(data_mat,2); % if loading specific data file
+    N           = 4000;                            % Number of samples TODO
+    t           = 1/fs:1/fs:N/fs;                               % Time axis
+
+    %% Models' Parameters
+    % BM's Parameters
+    leveldBSPL  = 50;
+    coef_b      = 1.019;    % Increasing or decreasing of b means increasing or decreasing ERB
+    coef_c      = -3;       % Controls the degree of asymmetry in gammachirp, when c=0, gammachirp=gammatone
+    coef_GTGC   = [coef_b, coef_c];
+    coef_d      = 3.1; %4.2040 3.1;   % Linear gain coef 1
+    coef_e      = -0.6; %-0.4791;  % Linear gain coef 2
+    coef_f      = 1.17274;  % Non-Linear bandwidth broken stick nonlinearity coef 1
+    coef_g      = 0.0113;   % Non-Linear bandwidth broken stick nonlinearity coef 2
+    coef_h      = 1.4030;   % a1 Broken-stick nonlinerity cofficients
+    coef_i      = 0.8192;   % a2 Broken-stick nonlinerity cofficients
+    coef_j      = 1.6191;   % b1 Broken-stick nonlinerity cofficients
+    coef_k      = -0.8187;  % b2 Broken-stick nonlinerity cofficients
+    coef_l      = -0.6021;  % c1 Broken-stick nonlinerity cofficients
+    coef_m      = 0;        % c2 Broken-stick nonlinerity cofficients
+    coef_DRNL   = [coef_d, coef_e, coef_f, coef_g, coef_h, coef_i, coef_j, coef_k, coef_l, coef_m];
+    BM_par      = [N, fs, nChan, leveldBSPL, coef_GTGC, coef_DRNL];
+
+    % SRM's Parameters
+    V_rest      = 0;        % resting membrane potential [V]
+    V_reset     = 0;    % after-potential hyperpolarization [V]
+    VarTheta    = 6.5e-6; %4.5e-4    % spike threshold [V]
+    G_m         = 1.67e+2;  % membrane conductance [S] (MAP parameter human)
+    Tau_m       = 0.0065;    % membrane time constant [s] (MAP parameter for human)
+    SRM_par     = [N, fs, nChan, V_rest, V_reset, VarTheta, G_m, Tau_m];
+    
+    % Entropy's Parameters
+    dt      = 0.5e-3;         % Time bin for spike train entropy calc %TODO
+    T       = 10e-3;        % Word length for spike train entropy calc TODO if adding zeros 14
+    ENT_par = [N, fs, nData, dt, T];
+
+    %% Model
+    parfor i = 1:nData
+        data_mat(:,i)        = data_mat(:,i) - mean(data_mat(:,i)); % Zero mean correction
+        data        = commonbandpass(min_f, data_mat(:,i), max_f, fs);  % Low Pass Filter
+        %size(data)
+        %data = [data ; zeros(3000,1)] %comment out to revert
+        %size(data)
+        normalizer  = sqrt(sum(data.^2));
+        data        = data./normalizer;
+
+    % Basilar Membrane Displacement Function
+        [BM_out(:,:,i)]    = BM_BOX(BM_model, data, BM_par, fc, ERB);  % 1: GT, 2: GC, 3: DRNL
+    %normalize BM_out    
+         %BM_out(:,:,i)      = BM_out(:,:,i) - mean(BM_out(:,:,i)); % Zero mean correction
+         %temp = max(max(abs(BM_out(:,:,i))));
+%           temp = BM_out(:,:,i);
+%          for j = 1:nChan
+%              norm_max = max(abs(temp(:,j)));
+%              %normalizer  =        sqrt(sum(temp(:,j).^2)); %full energy norm
+%              %temp(:,j)       = temp(:,j)./normalizer; %full energy norm
+%              temp(:,j)       = temp(:,j)./norm_max;
+% %              normalizer  =        max(abs(temp(:,j)));
+% %              temp(:,j)       = temp(:,j)./normalizer;
+%              
+%          end
+%           BM_out(:,:,i) = temp;
+         %BM_out(:,:,i) = BM_out(:,:,i)./temp;
+        % Inner Hair Cell Calcium Current Function
+        [IHC_out(:,:,i)]   = IHC_BOX(BM_out(:,:,i), fs, nChan);   
+        
+        temp = IHC_out(:,:,i);
+        for j = 1:nChan
+            div = sqrt(sum(temp(:,j).^2));
+            temp(:,j) = temp(:,j)./div;
+        end
+        IHC_out(:,:,i) = temp;
+        %IHC_out(:,:,i) =  IHC_out(:,:,i)./max(max(IHC_out(:,:,i)));
+        
+        % Spiking Activity Function
+        [SRM_out(:,:,i), Tspikes(:,i)]  = SRM_BOX(SR_model,  IHC_out(:,:,i), SRM_par);     % 1: Leaky IAF, 2: Kernels
+    end
+ fc = fc;
+ 
+ if count == 1
+        %w1 = w;
+        SRM1 = SRM_out;
+        w1 = ISI_func(SRM1);
+        %IHC1 = IHC_out;
+        %BM1 = BM_out;
+    else
+        %w2 = w;
+        SRM2 = SRM_out;
+        w2 = ISI_func(SRM2);
+        %IHC2 = IHC_out;
+        %BM2 = BM_out;
+    end  
+ 
+     %% Clear stuff you don't need
+    %clearvars -except w1 w2 SRM1 SRM2 nData nChan TE lb TE_CDM x Entropy count full_dyn TE_neuron BM_out IHC_out  IHC1 BM1 fc BM_model SR_model data_range w1 VarTheta Tau_m N
+end
+%w1 = binning_only(SRM1);
+%w2 = binning_only(SRM2);
+
+% c = clock
+% 
+% 
+s1 = sum(SRM1);
+s1 = reshape(s1,nChan,nData);
+s1 = sum(s1')./nData;
+figure;bar(s1)
+
+s2 = sum(SRM2);
+s2 = reshape(s2,nChan,nData);
+s2 = sum(s2')./nData;
+figure;bar(s2);
+figure;bar(s1 - s2);
+
+
+file_name = 'Mix1_ISI_EC_nzpn4_highspike_DRK2';
+
+%save(file_name, 'BM_model', 'SR_model' , 'w1' , 'w2', 'data_range', 'VarTheta', 'Tau_m')
+
+if size(w1,2)-size(w2,2) == 0
+    same = 1
+elseif size(w1,2)-size(w2,2)>= 0
+    w2 = [w2 zeros(size(w2,1),size(w1,2)-size(w2,2),size(w2,3))];
+else
+    w1 = [w1 zeros(size(w1,1),size(w2,2)-size(w1,2),size(w1,3))];
+end
+
+%% File Prep for CNN   
+nChan = 100;
+nData = length(w1);
+slength = size(w1,2);
+
+st = reshape(w1, nData, nChan, slength);
+
+lb = round(diff(limits)./stepsize);
+l1 = 1.*ones(lb(1)+1, 1);
+l2 = 2.*ones(lb(2), 1);
+l3 = 3.*ones(lb(3), 1);
+l4 = 4.*ones(lb(4), 1);
+l5 = 5.*ones(lb(5), 1);
+l6 = 6.*ones(lb(6), 1);
+l7 = 7.*ones(lb(7), 1);
+l8 = 8.*ones(lb(8), 1);
+%st_label = [l1; l2;  l3 ; l4; l5; l6; l7; l8];
+
+st_label = ones(nData,1);
+
+%st = sort(st,3); %remove when need unsorted
+
+dy = reshape(w2, nData, nChan, slength);
+
+l1 = 9.*ones(lb(1)+1, 1);
+l2 = 10.*ones(lb(2), 1);
+l3 = 11.*ones(lb(3), 1);
+l4 = 12.*ones(lb(4), 1);
+l5 = 13.*ones(lb(5), 1);
+l6 = 14.*ones(lb(6), 1);
+l7 = 15.*ones(lb(7), 1);
+l8 = 16.*ones(lb(8), 1);
+%dy_label = [l1; l2;  l3 ; l4; l5; l6; l7; l8];
+ls1 = 3.*ones(round(nData/2), 1);
+ls2 = 4.*ones(nData-round(nData/2),1);
+dy_label = zeros(nData,1);
+
+
+%dy = sort(dy,3); %remove when need unsorted
+
+data = [st ; dy];
+label = [st_label; dy_label];
+
+%% Saving Files
+save('ISI_step10_GCK_nIHC_CNN_data.mat', 'data')
+save('ISI_step10_GCK_nIHC_CNN_label.mat', 'label')
+ 
+%save('DR_analysis.mat', 's1', 's2', 'w1', 'w2')
+
